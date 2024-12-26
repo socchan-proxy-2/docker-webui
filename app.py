@@ -1,4 +1,4 @@
-from flask import Flask, redirect, url_for, session, request, render_template_string
+from flask import Flask, redirect, url_for, session, request, render_template_string, flash
 import requests
 from urllib.parse import urlencode
 import os
@@ -14,40 +14,62 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# GitHub OAuth設定
-CLIENT_ID = os.getenv('GITHUB_CLIENT_ID')
-CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET')
-AUTHORIZATION_BASE_URL = 'https://github.com/login/oauth/authorize'
-TOKEN_URL = 'https://github.com/login/oauth/access_token'
-USER_API_URL = 'https://api.github.com/user'
+# 環境変数を格納するファイルのパス
+ENV_FILE_PATH = '.env'
 
-# Resend設定
-RESEND_API_KEY = os.getenv('RESEND_API_KEY')
-FROM_EMAIL = os.getenv('FROM_EMAIL')
+def save_env_variables(variables):
+    with open(ENV_FILE_PATH, 'w') as env_file:
+        for key, value in variables.items():
+            env_file.write(f"{key}={value}\n")
 
-def generate_qr_code(data):
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf)
-    buf.seek(0)
-    return buf
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if request.method == 'POST':
+        github_client_id = request.form['github_client_id']
+        github_client_secret = request.form['github_client_secret']
+        resend_api_key = request.form['resend_api_key']
+        from_email = request.form['from_email']
+
+        # 環境変数を保存
+        env_variables = {
+            'GITHUB_CLIENT_ID': github_client_id,
+            'GITHUB_CLIENT_SECRET': github_client_secret,
+            'RESEND_API_KEY': resend_api_key,
+            'FROM_EMAIL': from_email
+        }
+        save_env_variables(env_variables)
+
+        # 環境変数を再読み込み
+        load_dotenv()
+
+        flash('Settings updated successfully!')
+        return redirect(url_for('home'))
+
+    return render_template_string('''
+    <h1>Settings</h1>
+    <form method="post">
+        <label for="github_client_id">GitHub Client ID:</label><br>
+        <input type="text" id="github_client_id" name="github_client_id"><br><br>
+        <label for="github_client_secret">GitHub Client Secret:</label><br>
+        <input type="text" id="github_client_secret" name="github_client_secret"><br><br>
+        <label for="resend_api_key">Resend API Key:</label><br>
+        <input type="text" id="resend_api_key" name="resend_api_key"><br><br>
+        <label for="from_email">From Email:</label><br>
+        <input type="email" id="from_email" name="from_email"><br><br>
+        <input type="submit" value="Save">
+    </form>
+    ''')
 
 @app.route('/')
 def home():
+    if not os.getenv('GITHUB_CLIENT_ID') or not os.getenv('GITHUB_CLIENT_SECRET') or not os.getenv('RESEND_API_KEY') or not os.getenv('FROM_EMAIL'):
+        return redirect(url_for('settings'))
     return 'Welcome! <a href="/login">Login with GitHub</a>'
 
 @app.route('/login')
 def login():
     params = {
-        'client_id': CLIENT_ID,
+        'client_id': os.getenv('GITHUB_CLIENT_ID'),
         'redirect_uri': url_for('callback', _external=True),
         'scope': 'user:email',
         'state': os.urandom(8).hex()
@@ -64,8 +86,8 @@ def callback():
         TOKEN_URL,
         headers={'Accept': 'application/json'},
         data={
-            'client_id': CLIENT_ID,
-            'client_secret': CLIENT_SECRET,
+            'client_id': os.getenv('GITHUB_CLIENT_ID'),
+            'client_secret': os.getenv('GITHUB_CLIENT_SECRET'),
             'code': code,
             'redirect_uri': url_for('callback', _external=True),
             'state': state
@@ -127,7 +149,7 @@ def verify_2fa():
 
 def send_2fa_verification_email(to_email, otp):
     email_data = {
-        "from": FROM_EMAIL,
+        "from": os.getenv('FROM_EMAIL'),
         "to": to_email,
         "subject": "Your 2FA verification code",
         "text": f"Your verification code is: {otp}"
@@ -137,7 +159,7 @@ def send_2fa_verification_email(to_email, otp):
         response = requests.post(
             "https://api.resend.io/v1/email/send",
             headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Authorization": f"Bearer {os.getenv('RESEND_API_KEY')}",
                 "Content-Type": "application/json"
             },
             json=email_data
